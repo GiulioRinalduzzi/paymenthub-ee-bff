@@ -31,6 +31,7 @@ import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.List;
 
 
 public class TenantAwareHeaderFilter extends GenericFilterBean {
@@ -38,11 +39,30 @@ public class TenantAwareHeaderFilter extends GenericFilterBean {
     private static final String TENANT_IDENTIFIER_REQUEST_HEADER = "Platform-TenantId";
     private static final String TENANT_IDENTIFIER_REQUEST_PARAM = "tenantIdentifier";
     private static final String EXCLUDED_URL = "/oauth/token_key";
+    /**
+     * G2P reference data is shared by all tenants, it lives in the core schema.
+     * The operations web console calls these paths without a Platform-TenantId
+     * header (its interceptor only adds it to /batches, /transactions and
+     * /transfers), so asking for a tenant here would fail every call.
+     * With no tenant set, DataSourcePerTenantService falls back to the core
+     * connection, which is where these tables are.
+     */
+    private static final List<String> TENANT_LESS_PATHS =
+            List.of("/governmentEntity", "/program", "/dfsp", "/g2pPaymentConfig");
     private final Logger logger = LoggerFactory.getLogger(this.getClass());
     private final TenantServerConnectionRepository repository;
 
     public TenantAwareHeaderFilter(TenantServerConnectionRepository repository) {
         this.repository = repository;
+    }
+
+    private static boolean isTenantLess(String servletPath) {
+        for (String path : TENANT_LESS_PATHS) {
+            if (servletPath.equals(path) || servletPath.startsWith(path + "/")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -53,7 +73,7 @@ public class TenantAwareHeaderFilter extends GenericFilterBean {
         task.start();
 
         try {
-            if(!EXCLUDED_URL.equals(request.getServletPath()) &&
+            if(!EXCLUDED_URL.equals(request.getServletPath()) && !isTenantLess(request.getServletPath()) &&
                     !request.getServletPath().contains("swagger") && !request.getServletPath().contains("api-docs") && !request.getServletPath().contains("actuator") ) {
                 String tenantIdentifier = request.getHeader(TENANT_IDENTIFIER_REQUEST_HEADER);
                 if (tenantIdentifier == null || tenantIdentifier.length() < 1) {

@@ -21,8 +21,11 @@ import java.util.HashMap;
 import java.util.Map;
 
 @Configuration
-@EntityScan(basePackages = "org.apache.fineract")
-@EnableJpaRepositories(basePackages = "org.apache.fineract")
+// org.mifos.g2pconnector holds the G2P reference data (government entities,
+// programs, DFSPs, payment configs) that used to be its own service. Its
+// entities are plain JPA, so they run on EclipseLink unchanged.
+@EntityScan(basePackages = { "org.apache.fineract", "org.mifos.g2pconnector" })
+@EnableJpaRepositories(basePackages = { "org.apache.fineract", "org.mifos.g2pconnector" })
 @EnableTransactionManagement(proxyTargetClass = true)
 public class EclipselinkJpaConfig extends JpaBaseConfiguration {
 
