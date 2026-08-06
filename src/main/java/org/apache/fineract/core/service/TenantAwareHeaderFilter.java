@@ -38,7 +38,10 @@ public class TenantAwareHeaderFilter extends GenericFilterBean {
 
     private static final String TENANT_IDENTIFIER_REQUEST_HEADER = "Platform-TenantId";
     private static final String TENANT_IDENTIFIER_REQUEST_PARAM = "tenantIdentifier";
-    private static final String EXCLUDED_URL = "/oauth/token_key";
+    // public because ResourceServerConfig has to know which paths run without a
+    // tenant: those get a filter chain with no resource server on it, otherwise a
+    // bearer token on them reaches AudienceVerifier with no tenant to compare against
+    public static final String EXCLUDED_URL = "/oauth/token_key";
     /**
      * G2P reference data is shared by all tenants, it lives in the core schema.
      * The operations web console calls these paths without a Platform-TenantId
@@ -47,7 +50,7 @@ public class TenantAwareHeaderFilter extends GenericFilterBean {
      * With no tenant set, DataSourcePerTenantService falls back to the core
      * connection, which is where these tables are.
      */
-    private static final List<String> TENANT_LESS_PATHS =
+    public static final List<String> TENANT_LESS_PATHS =
             List.of("/governmentEntity", "/program", "/dfsp", "/g2pPaymentConfig");
     private final Logger logger = LoggerFactory.getLogger(this.getClass());
     private final TenantServerConnectionRepository repository;

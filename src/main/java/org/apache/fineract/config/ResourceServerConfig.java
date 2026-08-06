@@ -4,11 +4,13 @@ import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import org.apache.fineract.core.service.AudienceVerifier;
+import org.apache.fineract.core.service.TenantAwareHeaderFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -31,6 +33,7 @@ import org.springframework.security.web.access.expression.WebExpressionAuthoriza
 
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -65,7 +68,49 @@ public class ResourceServerConfig {
     @Value("${rest.authorization.enabled}")
     private boolean isRestAuthEnabled;
 
+    /**
+     * The paths TenantAwareHeaderFilter lets through without resolving a tenant get
+     * their own chain, with no resource server on it.
+     *
+     * Spring Security validates a bearer token whenever one is present, permitAll or
+     * not. On these paths no tenant is set, so AudienceVerifier - which compares the
+     * token's audience against the tenant schema name - dereferences a null tenant
+     * and the request comes back 500 instead of being served. The operations web
+     * console sends the Authorization header on every request (its interceptor keeps
+     * it in a shared header map), so every G2P call from the console hit that.
+     *
+     * The same hole applied to /actuator/** and /oauth/token_key, which the filter
+     * also skips. swagger and api-docs are already outside the chain entirely, via
+     * the WebSecurityCustomizer in WebSecurityConfiguration.
+     */
     @Bean
+    @Order(1)
+    public SecurityFilterChain tenantLessSecurityFilterChain(HttpSecurity http) throws Exception {
+        http.securityMatcher(tenantLessMatchers())
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+                .csrf(AbstractHttpConfigurer::disable)
+                .cors(AbstractHttpConfigurer::disable)
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+        return http.build();
+    }
+
+    /**
+     * Built from TenantAwareHeaderFilter.TENANT_LESS_PATHS so the list of G2P paths
+     * lives in one place.
+     */
+    private static String[] tenantLessMatchers() {
+        List<String> patterns = new ArrayList<>();
+        for (String path : TenantAwareHeaderFilter.TENANT_LESS_PATHS) {
+            patterns.add(path);
+            patterns.add(path + "/**");
+        }
+        patterns.add("/actuator/**");
+        patterns.add(TenantAwareHeaderFilter.EXCLUDED_URL);
+        return patterns.toArray(new String[0]);
+    }
+
+    @Bean
+    @Order(2)
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtDecoder jwtDecoder) throws Exception {
         http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .csrf(AbstractHttpConfigurer::disable)

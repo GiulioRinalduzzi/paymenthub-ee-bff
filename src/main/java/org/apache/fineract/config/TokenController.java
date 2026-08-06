@@ -14,6 +14,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.AccountStatusUserDetailsChecker;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -135,6 +136,13 @@ public class TokenController {
                 }
                 String username = refreshToken.getClaimAsString("user_name");
                 UserDetails user = userDetailsService.loadUserByUsername(username);
+                // loadUserByUsername returns a disabled or locked user instead of
+                // throwing, so without this a user disabled in m_appuser keeps minting
+                // access tokens for the rest of the refresh token's life (30 days by
+                // default). The old DefaultTokenServices ran the same check through a
+                // UserDetailsChecker. The exceptions it throws are AuthenticationException,
+                // so they come out as the usual 401 body.
+                new AccountStatusUserDetailsChecker().check(user);
                 List<String> authorities = toAuthorityNames(user.getAuthorities());
                 // the refresh token that came in is handed back unchanged, like the old
                 // DefaultTokenServices did (reuseRefreshToken is true by default). Issuing a
