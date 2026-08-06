@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -127,12 +128,52 @@ public class ResourceServerConfig {
         return converter;
     }
 
+    /**
+     * Decoder the resource server uses for bearer tokens. On top of the shared
+     * validators it refuses refresh tokens: those are signed with the same key and
+     * carry no "authorities" claim, so without this check one could be sent as a
+     * bearer token and would authenticate with an empty authority list. That is
+     * enough to satisfy anyRequest().fullyAuthenticated() on every endpoint with no
+     * explicit rule in rest.authorization.settings, for the whole
+     * refresh_token_validity (30 days by default, against 12 hours for an access
+     * token).
+     */
     @Bean
+    @Primary
     public JwtDecoder jwtDecoder(AudienceVerifier audienceVerifier) {
+        return buildDecoder(List.of(JwtValidators.createDefault(), resourceIdValidator(), audienceVerifier,
+                accessTokenOnlyValidator()));
+    }
+
+    /**
+     * Decoder for /oauth/token and /oauth/check_token, which have to be able to
+     * read a refresh token. Same validators as the one above, without the
+     * access-token-only check. TokenController still verifies the "refresh" claim
+     * itself before accepting a token for the refresh grant.
+     */
+    @Bean
+    public JwtDecoder tokenEndpointJwtDecoder(AudienceVerifier audienceVerifier) {
+        return buildDecoder(List.of(JwtValidators.createDefault(), resourceIdValidator(), audienceVerifier));
+    }
+
+    private static JwtDecoder buildDecoder(List<OAuth2TokenValidator<Jwt>> validators) {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(PemUtils.readPublicKey("jwt_pub.pem")).build();
-        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
-                JwtValidators.createDefault(), resourceIdValidator(), audienceVerifier));
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(validators));
         return decoder;
+    }
+
+    /**
+     * Rejects a token carrying the "refresh" claim set by
+     * TokenController.buildRefreshToken.
+     */
+    private static OAuth2TokenValidator<Jwt> accessTokenOnlyValidator() {
+        return jwt -> {
+            if (Boolean.TRUE.equals(jwt.getClaim("refresh"))) {
+                return OAuth2TokenValidatorResult.failure(new OAuth2Error(OAuth2ErrorCodes.INVALID_TOKEN,
+                        "A refresh token cannot be used as an access token", null));
+            }
+            return OAuth2TokenValidatorResult.success();
+        };
     }
 
     /**
@@ -140,8 +181,9 @@ public class ResourceServerConfig {
      * ResourceServerSecurityConfigurer. The old stack checked this in
      * OAuth2AuthenticationManager, with the same rule kept here: a token is
      * rejected only if it carries an audience list that does not contain
-     * "identity-provider". A token with no audience at all was accepted before
-     * and still is.
+     * "identity-provider". A token with no audience at all passes this validator,
+     * as it did before; note that AudienceVerifier, next in the same chain, then
+     * rejects it because the tenant schema name is missing from "aud".
      */
     private static OAuth2TokenValidator<Jwt> resourceIdValidator() {
         return jwt -> {
