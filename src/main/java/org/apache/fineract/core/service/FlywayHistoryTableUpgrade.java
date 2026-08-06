@@ -62,6 +62,16 @@ final class FlywayHistoryTableUpgrade {
                 return; // already on the Flyway 10 layout
             }
             if (!tableExists(connection, schema, LEGACY_TABLE)) {
+                if (tableExists(connection, schema, BACKUP_TABLE)) {
+                    // the backup exists but neither history table does, so a previous
+                    // conversion was interrupted after the rename. Returning here would
+                    // look like a fresh database to Flyway, which would then baseline and
+                    // re-apply every migration on a schema that already has the objects.
+                    // Fail loudly instead: the history is recoverable from the backup.
+                    throw new IllegalStateException("Schema " + schema + " has " + BACKUP_TABLE + " but no "
+                            + CURRENT_TABLE + " and no " + LEGACY_TABLE + ": a previous history conversion was "
+                            + "interrupted. Restore the history from " + BACKUP_TABLE + " before starting again.");
+                }
                 return; // fresh database, Flyway will create its own table
             }
             if (columnExists(connection, schema, LEGACY_TABLE, "version_rank")) {
@@ -85,6 +95,14 @@ final class FlywayHistoryTableUpgrade {
     }
 
     private static void convertLegacyTable(Connection connection) throws SQLException {
+        // the cleanup below must only remove a table this call created, and only
+        // before the rename. If two instances start together they both get here, the
+        // CREATE TABLE of the loser fails, and dropping on the way out would delete
+        // the history the winner has just converted. After the rename there is
+        // nothing safe to undo either: MySQL commits implicitly on DDL, so by then
+        // the copy is already durable.
+        boolean tableCreated = false;
+        boolean legacyRenamed = false;
         try (Statement statement = connection.createStatement()) {
             try {
                 // same DDL Flyway 10 itself uses for MySQL
@@ -101,6 +119,7 @@ final class FlywayHistoryTableUpgrade {
                         + "success BOOL NOT NULL,"
                         + "CONSTRAINT " + CURRENT_TABLE + "_pk PRIMARY KEY (installed_rank)"
                         + ") ENGINE=InnoDB");
+                tableCreated = true;
                 statement.execute("CREATE INDEX " + CURRENT_TABLE + "_s_idx ON " + CURRENT_TABLE + " (success)");
                 // description was nullable before and is NOT NULL now; "INIT" was
                 // renamed to "BASELINE" when Flyway 5 came out
@@ -112,17 +131,20 @@ final class FlywayHistoryTableUpgrade {
                         + " script, checksum, installed_by, installed_on, execution_time, success"
                         + " FROM " + LEGACY_TABLE);
                 statement.execute("RENAME TABLE " + LEGACY_TABLE + " TO " + BACKUP_TABLE);
+                legacyRenamed = true;
                 commitIfNeeded(connection);
             } catch (SQLException e) {
                 // leave no half-built table behind: the next start must be able to retry
-                try {
-                    if (!connection.getAutoCommit()) {
-                        connection.rollback();
+                if (tableCreated && !legacyRenamed) {
+                    try {
+                        if (!connection.getAutoCommit()) {
+                            connection.rollback();
+                        }
+                        statement.execute("DROP TABLE IF EXISTS " + CURRENT_TABLE);
+                        commitIfNeeded(connection);
+                    } catch (SQLException cleanupFailure) {
+                        e.addSuppressed(cleanupFailure);
                     }
-                    statement.execute("DROP TABLE IF EXISTS " + CURRENT_TABLE);
-                    commitIfNeeded(connection);
-                } catch (SQLException cleanupFailure) {
-                    e.addSuppressed(cleanupFailure);
                 }
                 throw e;
             }

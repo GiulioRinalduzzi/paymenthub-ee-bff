@@ -5,7 +5,9 @@ import org.apache.fineract.core.service.TenantAwareUserDetailsService;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -81,7 +83,10 @@ public class TokenController {
     @Autowired
     private JwtEncoder jwtEncoder;
 
+    // the decoder without the access-token-only validator: this endpoint has to be
+    // able to read a refresh token (see ResourceServerConfig)
     @Autowired
+    @Qualifier("tokenEndpointJwtDecoder")
     private JwtDecoder jwtDecoder;
 
     @Autowired
@@ -89,6 +94,14 @@ public class TokenController {
 
     @Autowired
     private RoutingDataSource routingDataSource;
+
+    private JdbcTemplate jdbcTemplate;
+
+    @PostConstruct
+    void initJdbcTemplate() {
+        // JdbcTemplate is thread safe, one instance is enough for every request
+        this.jdbcTemplate = new JdbcTemplate(routingDataSource);
+    }
 
     @PostMapping(value = "/oauth/token", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> token(@RequestParam Map<String, String> params,
@@ -110,6 +123,16 @@ public class TokenController {
 
             if ("refresh_token".equals(grantType)) {
                 Jwt refreshToken = decodeRefreshToken(params.get("refresh_token"));
+                // the refresh token has to belong to the client presenting it, like the old
+                // DefaultTokenServices.refreshAccessToken checked ("Wrong client for this
+                // refresh token"). Without this a client could redeem another client's
+                // refresh token and get an access token minted with its own resource_ids,
+                // scope and validity. Cross-tenant redemption is already blocked by
+                // AudienceVerifier; this closes it between clients of the same tenant.
+                String tokenClientId = refreshToken.getClaimAsString("client_id");
+                if (tokenClientId == null || !tokenClientId.equals(client.get("client_id"))) {
+                    throw new BadCredentialsException("Wrong client for this refresh token");
+                }
                 String username = refreshToken.getClaimAsString("user_name");
                 UserDetails user = userDetailsService.loadUserByUsername(username);
                 List<String> authorities = toAuthorityNames(user.getAuthorities());
@@ -137,8 +160,10 @@ public class TokenController {
             body.put("path", "/oauth/token");
             return new ResponseEntity<>(body.toString(), HttpStatus.UNAUTHORIZED);
         } catch (Exception e) {
+            // /oauth/token is permitAll, so the message must not carry internals
+            // (driver and SQL messages used to end up in the response body here)
             logger.error("Token request failed", e);
-            return errorResponse(HttpStatus.BAD_REQUEST, e.getMessage());
+            return errorResponse(HttpStatus.BAD_REQUEST, "invalid_request");
         }
     }
 
@@ -198,8 +223,7 @@ public class TokenController {
 
     private Map<String, Object> loadClient(String clientId) {
         try {
-            return new JdbcTemplate(routingDataSource)
-                    .queryForMap("SELECT * FROM oauth_client_details WHERE client_id = ?", clientId);
+            return jdbcTemplate.queryForMap("SELECT * FROM oauth_client_details WHERE client_id = ?", clientId);
         } catch (EmptyResultDataAccessException e) {
             throw new BadCredentialsException("Unknown client: " + clientId);
         }
@@ -300,6 +324,13 @@ public class TokenController {
         return names;
     }
 
+    /**
+     * The oauth_client_details columns are comma separated lists. Entries are not
+     * trimmed, matching the comma-delimited parsing the old JdbcClientDetailsService
+     * used: a row written as "password, refresh_token" is rejected by both the old
+     * code and this one. Worth fixing, but outside a migration that has to keep
+     * behaviour identical.
+     */
     private static List<String> commaSeparated(Object value) {
         if (value == null || value.toString().isEmpty()) {
             return List.of();

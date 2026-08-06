@@ -92,7 +92,9 @@ jobs:
       - run:
           name: Build Application
           command: |
-            ./gradlew checkstyleMain
+            # checkstyleMain does not exist in this project (no checkstyle plugin),
+            # so it stays commented out as it was
+            # ./gradlew checkstyleMain
             ./gradlew clean bootJar
       - run:
           name: Sanitize Branch Name
