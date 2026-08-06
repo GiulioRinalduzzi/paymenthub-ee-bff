@@ -1,0 +1,268 @@
+package org.apache.fineract.config;
+
+import org.apache.fineract.core.service.RoutingDataSource;
+import org.apache.fineract.core.service.TenantAwareUserDetailsService;
+import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
+import org.springframework.security.oauth2.jwt.JwsHeader;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.security.oauth2.jwt.JwtException;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * Replacement for the /oauth/token endpoint of the discontinued Spring
+ * Security OAuth2 authorization server (spring-security-oauth2 2.4.1). That
+ * stack does not exist for Spring Boot 3, and its successor
+ * (spring-authorization-server) dropped the password grant that the
+ * operations web console uses to log in. So the endpoint is re-implemented
+ * here with the same external contract:
+ *
+ * - grant_type=password           username/password checked against the tenant DB users
+ * - grant_type=refresh_token      re-issues tokens from a valid refresh token
+ * - grant_type=client_credentials for machine clients (e.g. channel-<tenant>)
+ * - clients and their token validities still come from the oauth_client_details
+ *   table of the current tenant (same rows the old JdbcClientDetailsService read)
+ * - tokens are the same RSA-signed JWTs (jwt.pem), with the same claims the old
+ *   JwtAccessTokenConverter produced (user_name, authorities, aud, scope, jti)
+ * - the JSON response body and the 401 error body keep the old shape (the 401
+ *   replicates what AuthExceptionTranslator used to return)
+ */
+@RestController
+public class TokenController {
+
+    // DefaultTokenServices defaults from the old stack
+    private static final long DEFAULT_ACCESS_TOKEN_VALIDITY_SECONDS = 60 * 60 * 12;
+    private static final long DEFAULT_REFRESH_TOKEN_VALIDITY_SECONDS = 60L * 60 * 24 * 30;
+
+    private final Logger logger = LoggerFactory.getLogger(this.getClass());
+
+    @Autowired
+    private AuthenticationManager authenticationManager;
+
+    @Autowired
+    private TenantAwareUserDetailsService userDetailsService;
+
+    @Autowired
+    private JwtEncoder jwtEncoder;
+
+    @Autowired
+    private JwtDecoder jwtDecoder;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private RoutingDataSource routingDataSource;
+
+    @PostMapping(value = "/oauth/token", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> token(@RequestParam Map<String, String> params,
+            @RequestHeader(value = "Authorization", required = false) String authorizationHeader) {
+        try {
+            String grantType = params.get("grant_type");
+            String[] clientCredentials = resolveClientCredentials(params, authorizationHeader);
+            Map<String, Object> client = loadClient(clientCredentials[0]);
+            checkClientSecret(client, clientCredentials[1]);
+            checkGrantAllowed(client, grantType);
+
+            if ("password".equals(grantType)) {
+                Authentication user = authenticationManager
+                        .authenticate(new UsernamePasswordAuthenticationToken(params.get("username"), params.get("password")));
+                List<String> authorities = toAuthorityNames(user.getAuthorities());
+                return tokenResponse(client, buildAccessToken(client, user.getName(), authorities, true),
+                        buildRefreshToken(client, user.getName()));
+            }
+
+            if ("refresh_token".equals(grantType)) {
+                Jwt refreshToken = decodeRefreshToken(params.get("refresh_token"));
+                String username = refreshToken.getClaimAsString("user_name");
+                UserDetails user = userDetailsService.loadUserByUsername(username);
+                List<String> authorities = toAuthorityNames(user.getAuthorities());
+                return tokenResponse(client, buildAccessToken(client, username, authorities, true),
+                        buildRefreshToken(client, username));
+            }
+
+            if ("client_credentials".equals(grantType)) {
+                List<String> authorities = commaSeparated(client.get("authorities"));
+                return tokenResponse(client, buildAccessToken(client, (String) client.get("client_id"), authorities, false), null);
+            }
+
+            return errorResponse(HttpStatus.BAD_REQUEST, "Unsupported grant type: " + grantType);
+        } catch (AuthenticationException e) {
+            // same body the old AuthExceptionTranslator produced for InvalidGrantException
+            JSONObject body = new JSONObject();
+            body.put("timestamp", new Date().toInstant().toEpochMilli());
+            body.put("status", "401");
+            body.put("error", "Unauthorized");
+            body.put("message", "Invalid credentials");
+            body.put("path", "/oauth/token");
+            return new ResponseEntity<>(body.toString(), HttpStatus.UNAUTHORIZED);
+        } catch (Exception e) {
+            logger.error("Token request failed", e);
+            return errorResponse(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private String[] resolveClientCredentials(Map<String, String> params, String authorizationHeader) {
+        if (authorizationHeader != null && authorizationHeader.toLowerCase().startsWith("basic ")) {
+            String decoded = new String(Base64.getDecoder().decode(authorizationHeader.substring(6)), StandardCharsets.UTF_8);
+            int separator = decoded.indexOf(':');
+            if (separator < 0) {
+                throw new BadCredentialsException("Malformed Basic authentication header");
+            }
+            return new String[] { decoded.substring(0, separator), decoded.substring(separator + 1) };
+        }
+        if (params.containsKey("client_id")) {
+            return new String[] { params.get("client_id"), params.getOrDefault("client_secret", "") };
+        }
+        throw new BadCredentialsException("Missing client authentication");
+    }
+
+    private Map<String, Object> loadClient(String clientId) {
+        try {
+            return new JdbcTemplate(routingDataSource)
+                    .queryForMap("SELECT * FROM oauth_client_details WHERE client_id = ?", clientId);
+        } catch (EmptyResultDataAccessException e) {
+            throw new BadCredentialsException("Unknown client: " + clientId);
+        }
+    }
+
+    private void checkClientSecret(Map<String, Object> client, String providedSecret) {
+        String stored = (String) client.get("client_secret");
+        String provided = providedSecret == null ? "" : providedSecret;
+        if (stored == null || stored.isEmpty()) {
+            return; // public client with no secret
+        }
+        boolean matches = stored.startsWith("$2") ? passwordEncoder.matches(provided, stored) : stored.equals(provided);
+        if (!matches) {
+            throw new BadCredentialsException("Bad client credentials");
+        }
+    }
+
+    private void checkGrantAllowed(Map<String, Object> client, String grantType) {
+        List<String> allowed = commaSeparated(client.get("authorized_grant_types"));
+        if (grantType == null || !allowed.contains(grantType)) {
+            throw new BadCredentialsException("Grant type " + grantType + " not allowed for this client");
+        }
+    }
+
+    private Jwt decodeRefreshToken(String token) {
+        if (token == null) {
+            throw new BadCredentialsException("Missing refresh_token");
+        }
+        try {
+            Jwt jwt = jwtDecoder.decode(token);
+            if (!Boolean.TRUE.equals(jwt.getClaim("refresh"))) {
+                throw new BadCredentialsException("Not a refresh token");
+            }
+            return jwt;
+        } catch (JwtException e) {
+            throw new BadCredentialsException("Invalid refresh token", e);
+        }
+    }
+
+    private Jwt buildAccessToken(Map<String, Object> client, String subject, List<String> authorities, boolean userToken) {
+        Instant now = Instant.now();
+        long validity = intColumn(client, "access_token_validity", DEFAULT_ACCESS_TOKEN_VALIDITY_SECONDS);
+        JwtClaimsSet.Builder claims = JwtClaimsSet.builder()
+                .subject(subject)
+                .audience(commaSeparated(client.get("resource_ids")))
+                .issuedAt(now)
+                .expiresAt(now.plusSeconds(validity))
+                .id(UUID.randomUUID().toString())
+                .claim("client_id", client.get("client_id"))
+                .claim("scope", commaSeparated(client.get("scope")))
+                .claim("authorities", authorities);
+        if (userToken) {
+            claims.claim("user_name", subject);
+        }
+        return jwtEncoder.encode(JwtEncoderParameters.from(JwsHeader.with(SignatureAlgorithm.RS256).build(), claims.build()));
+    }
+
+    private Jwt buildRefreshToken(Map<String, Object> client, String username) {
+        Instant now = Instant.now();
+        long validity = intColumn(client, "refresh_token_validity", DEFAULT_REFRESH_TOKEN_VALIDITY_SECONDS);
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .subject(username)
+                .audience(commaSeparated(client.get("resource_ids")))
+                .issuedAt(now)
+                .expiresAt(now.plusSeconds(validity))
+                .id(UUID.randomUUID().toString())
+                .claim("client_id", client.get("client_id"))
+                .claim("user_name", username)
+                .claim("refresh", true)
+                .build();
+        return jwtEncoder.encode(JwtEncoderParameters.from(JwsHeader.with(SignatureAlgorithm.RS256).build(), claims));
+    }
+
+    private ResponseEntity<String> tokenResponse(Map<String, Object> client, Jwt accessToken, Jwt refreshToken) {
+        JSONObject body = new JSONObject();
+        body.put("access_token", accessToken.getTokenValue());
+        body.put("token_type", "bearer");
+        if (refreshToken != null) {
+            body.put("refresh_token", refreshToken.getTokenValue());
+        }
+        body.put("expires_in", accessToken.getExpiresAt().getEpochSecond() - Instant.now().getEpochSecond());
+        body.put("scope", String.join(" ", commaSeparated(client.get("scope"))));
+        body.put("jti", accessToken.getId());
+        return ResponseEntity.ok(body.toString());
+    }
+
+    private ResponseEntity<String> errorResponse(HttpStatus status, String message) {
+        JSONObject body = new JSONObject();
+        body.put("error", message);
+        return new ResponseEntity<>(body.toString(), status);
+    }
+
+    private static List<String> toAuthorityNames(Iterable<? extends GrantedAuthority> authorities) {
+        List<String> names = new ArrayList<>();
+        for (GrantedAuthority authority : authorities) {
+            names.add(authority.getAuthority());
+        }
+        return names;
+    }
+
+    private static List<String> commaSeparated(Object value) {
+        if (value == null || value.toString().isEmpty()) {
+            return List.of();
+        }
+        return Arrays.asList(value.toString().split(","));
+    }
+
+    private static long intColumn(Map<String, Object> client, String column, long defaultValue) {
+        Object value = client.get(column);
+        return value == null ? defaultValue : ((Number) value).longValue();
+    }
+}
