@@ -45,6 +45,7 @@ import java.util.Base64;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -194,6 +195,11 @@ public class TokenController {
      * with an invalid_token error. It required authentication before
      * (checkTokenAccess("isAuthenticated()")) and still does: ResourceServerConfig
      * closes it in both branches of rest.authorization.enabled.
+     *
+     * It decodes with tokenEndpointJwtDecoder, so it also reports a refresh token as
+     * valid. That is on purpose: the old CheckTokenEndpoint had one converter for both
+     * kinds of token and did the same. Callers that need to know which one they hold
+     * can read the "refresh" claim from the response.
      */
     @PostMapping(value = "/oauth/check_token", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> checkToken(@RequestParam("token") String token) {
@@ -216,7 +222,9 @@ public class TokenController {
     }
 
     private String[] resolveClientCredentials(Map<String, String> params, String authorizationHeader) {
-        if (authorizationHeader != null && authorizationHeader.toLowerCase().startsWith("basic ")) {
+        // Locale.ROOT: in a Turkish default locale "BASIC " lowercases to "bas0131c "
+        // and no Basic header would ever be recognised
+        if (authorizationHeader != null && authorizationHeader.toLowerCase(Locale.ROOT).startsWith("basic ")) {
             String decoded = new String(Base64.getDecoder().decode(authorizationHeader.substring(6)), StandardCharsets.UTF_8);
             int separator = decoded.indexOf(':');
             if (separator < 0) {

@@ -105,7 +105,7 @@ public class TenantDatabaseUpgradeService {
                     // The Flyway 2.x history table (schema_version) is converted to the Flyway 10 one
                     // (flyway_schema_history) first: Flyway 10 can read the old table but cannot write to it.
                     DataSource tenantDataSource = dataSourcePerTenantService.retrieveDataSource();
-                    FlywayHistoryTableUpgrade.upgradeIfNeeded(tenantDataSource);
+                    boolean historyConverted = FlywayHistoryTableUpgrade.upgradeIfNeeded(tenantDataSource);
                     final Flyway fw = Flyway.configure()
                             .dataSource(tenantDataSource)
                             .locations("sql/migrations/tenant")
@@ -113,10 +113,15 @@ public class TenantDatabaseUpgradeService {
                             .outOfOrder(true)
                             .placeholders(placeholders)
                             .load();
-                    // repair() first: the history written by Flyway 2.x holds checksums computed
-                    // with the old algorithm, and Flyway 10 would fail validation on them.
-                    // repair() re-computes them; on a fresh database it is a no-op.
-                    fw.repair();
+                    // only after a conversion: the history written by Flyway 2.x holds checksums
+                    // computed with the old algorithm and Flyway 10 would fail validation on them,
+                    // which repair() re-computes. That is a one-time condition, so the call is
+                    // gated: repair() also marks as DELETED any history row whose script is no
+                    // longer on disk, and running it on every restart would keep rewriting the
+                    // history of a schema carrying migrations this repo does not ship.
+                    if (historyConverted) {
+                        fw.repair();
+                    }
                     fw.migrate();
                 } catch (Exception e) {
                     logger.error("Error when running flyway on tenant: {}", tenant.getSchemaName(), e);
@@ -146,15 +151,17 @@ public class TenantDatabaseUpgradeService {
     private void flywayDefaultSchema() {
         DataSource coreDataSource = dataSourcePerTenantService.retrieveDataSource();
         // convert the Flyway 2.x history table if this database has one (see flywayTenants)
-        FlywayHistoryTableUpgrade.upgradeIfNeeded(coreDataSource);
+        boolean historyConverted = FlywayHistoryTableUpgrade.upgradeIfNeeded(coreDataSource);
         final Flyway fw = Flyway.configure()
                 .dataSource(coreDataSource)
                 .locations("sql/migrations/core")
                 .baselineOnMigrate(true)
                 .outOfOrder(true)
                 .load();
-        // repair() re-computes Flyway 2.x checksums; no-op on a fresh database (see flywayTenants)
-        fw.repair();
+        // gated for the same reason as in flywayTenants
+        if (historyConverted) {
+            fw.repair();
+        }
         fw.migrate();
     }
 }

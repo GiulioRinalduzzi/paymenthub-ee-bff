@@ -48,6 +48,9 @@ public class PlatformRequestLog {
 
         final Map<String, String[]> parameters = new HashMap<>(request.getParameterMap());
         parameters.remove("password");
+        // this application now owns /oauth/token, so its form params land here too
+        parameters.remove("client_secret");
+        parameters.remove("refresh_token");
         parameters.remove("_");
 
         return new PlatformRequestLog(task.getStartTime(), task.getTime(), request.getMethod(), requestUrl, parameters);

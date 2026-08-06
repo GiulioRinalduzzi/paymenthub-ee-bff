@@ -28,6 +28,18 @@ public class AudienceVerifier implements OAuth2TokenValidator<Jwt> {
     public OAuth2TokenValidatorResult validate(Jwt jwt) {
         TenantServerConnection tenant = ThreadLocalContextUtil.getTenant();
         List<String> audiences = jwt.getAudience();
+        if (tenant == null) {
+            // No tenant means TenantAwareHeaderFilter let the request through without
+            // resolving one, so there is nothing to compare the audience against and the
+            // token cannot be accepted for this request. Before this the line below
+            // dereferenced null and the caller got a 500 instead of a 401. The paths
+            // that legitimately run without a tenant do not reach this validator at all -
+            // they are on the chain with no resource server, see ResourceServerConfig -
+            // so this is the safety net for anything else that ever skips the filter.
+            String message = "No tenant in context, cannot verify the token audience";
+            logger.error(message);
+            return OAuth2TokenValidatorResult.failure(new OAuth2Error(OAuth2ErrorCodes.INVALID_TOKEN, message, null));
+        }
         boolean matches = audiences != null && audiences.stream().anyMatch(a -> tenant.getSchemaName().equals(a));
         if (matches) {
             return OAuth2TokenValidatorResult.success();

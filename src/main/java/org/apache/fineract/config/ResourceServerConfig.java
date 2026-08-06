@@ -79,9 +79,11 @@ public class ResourceServerConfig {
      * console sends the Authorization header on every request (its interceptor keeps
      * it in a shared header map), so every G2P call from the console hit that.
      *
-     * The same hole applied to /actuator/** and /oauth/token_key, which the filter
-     * also skips. swagger and api-docs are already outside the chain entirely, via
-     * the WebSecurityCustomizer in WebSecurityConfiguration.
+     * The same hole applied to the health endpoints and /oauth/token_key, which the
+     * filter also skips. swagger and api-docs are already outside the chain entirely,
+     * via the WebSecurityCustomizer in WebSecurityConfiguration. The rest of
+     * /actuator is deliberately left on the main chain, so a token attached to it is
+     * still validated - see the note on the matcher list below.
      */
     @Bean
     @Order(1)
@@ -104,7 +106,15 @@ public class ResourceServerConfig {
             patterns.add(path);
             patterns.add(path + "/**");
         }
-        patterns.add("/actuator/**");
+        // only the health endpoints, not the whole /actuator tree. The reason for the
+        // exemption is the kubernetes probes, which carry no token, and the old
+        // ResourceServerConfig closed its rest.authorization.enabled branch with
+        // anyRequest().fullyAuthenticated(), so the rest of the tree was authenticated
+        // there. Keeping it narrow means a later exposure.include: "*" in some
+        // environment cannot publish /actuator/env unauthenticated through this chain.
+        patterns.add("/actuator/health");
+        patterns.add("/actuator/health/liveness");
+        patterns.add("/actuator/health/readiness");
         patterns.add(TenantAwareHeaderFilter.EXCLUDED_URL);
         return patterns.toArray(new String[0]);
     }
@@ -211,7 +221,7 @@ public class ResourceServerConfig {
      * Rejects a token carrying the "refresh" claim set by
      * TokenController.buildRefreshToken.
      */
-    private static OAuth2TokenValidator<Jwt> accessTokenOnlyValidator() {
+    static OAuth2TokenValidator<Jwt> accessTokenOnlyValidator() {
         return jwt -> {
             if (Boolean.TRUE.equals(jwt.getClaim("refresh"))) {
                 return OAuth2TokenValidatorResult.failure(new OAuth2Error(OAuth2ErrorCodes.INVALID_TOKEN,
@@ -230,7 +240,7 @@ public class ResourceServerConfig {
      * as it did before; note that AudienceVerifier, next in the same chain, then
      * rejects it because the tenant schema name is missing from "aud".
      */
-    private static OAuth2TokenValidator<Jwt> resourceIdValidator() {
+    static OAuth2TokenValidator<Jwt> resourceIdValidator() {
         return jwt -> {
             List<String> audiences = jwt.getAudience();
             if (audiences == null || audiences.isEmpty() || audiences.contains(IDENTITY_PROVIDER_RESOURCE_ID)) {

@@ -66,11 +66,18 @@ final class FlywayHistoryTableUpgrade {
     private FlywayHistoryTableUpgrade() {
     }
 
-    static void upgradeIfNeeded(DataSource dataSource) {
+    /**
+     * @return true if this call moved a history table written by an older Flyway,
+     *         which is the only situation where the caller needs Flyway.repair():
+     *         those rows carry checksums the current version will not validate.
+     *         False when there was nothing to do, so repair() can be skipped and
+     *         does not get a chance to mark rows DELETED on every restart.
+     */
+    static boolean upgradeIfNeeded(DataSource dataSource) {
         try (Connection connection = dataSource.getConnection()) {
             String schema = connection.getCatalog();
             if (tableExists(connection, schema, CURRENT_TABLE)) {
-                return; // already on the Flyway 10 layout
+                return false; // already on the Flyway 10 layout
             }
             if (!tableExists(connection, schema, LEGACY_TABLE)) {
                 if (tableExists(connection, schema, BACKUP_TABLE)) {
@@ -83,7 +90,7 @@ final class FlywayHistoryTableUpgrade {
                             + CURRENT_TABLE + " and no " + LEGACY_TABLE + ": a previous history conversion was "
                             + "interrupted. Restore the history from " + BACKUP_TABLE + " before starting again.");
                 }
-                return; // fresh database, Flyway will create its own table
+                return false; // fresh database, Flyway will create its own table
             }
             if (columnExists(connection, schema, LEGACY_TABLE, "version_rank")) {
                 // the root log level is ERROR, so application.yml raises this class to INFO:
@@ -100,6 +107,7 @@ final class FlywayHistoryTableUpgrade {
                 }
                 commitIfNeeded(connection);
             }
+            return true;
         } catch (SQLException e) {
             throw new IllegalStateException("Cannot upgrade the Flyway history table", e);
         }

@@ -42,7 +42,6 @@ configurations.all {
 
 repositories {
     mavenCentral()
-    maven { url = uri('https://repo.spring.io/libs-release') }
     maven { url = uri('https://repository.jboss.org/nexus/content/repositories/releases') }
     maven { url = uri('https://mifos.jfrog.io/artifactory/phee-gradle-local') }
     maven { url = uri('https://mifos.jfrog.io/artifactory/mifosx-gradle-local') }
@@ -84,6 +83,11 @@ dependencies {
     // Caffeine provides the same TTL/max-size semantics (see CacheConfig).
     implementation 'com.github.ben-manes.caffeine:caffeine'
     testImplementation 'junit:junit:4.11'
+    // JUnit 5 for the tests added with this migration. Versions from the BOM, and
+    // only the engine: spring-boot-starter-test would pull mockito, assertj, hamcrest
+    // and jsonpath for two tests over pure functions.
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     implementation 'net.sf.supercsv:super-csv:2.4.0'
     implementation 'com.amazonaws:aws-java-sdk:1.11.486'
     implementation 'com.azure:azure-storage-blob:12.12.0'
@@ -102,8 +106,13 @@ dependencies {
 group = 'org.apache.fineract'
 version = '2.0.0.mifos-SNAPSHOT'
 description = 'paymenthub-ee-bff'
-sourceCompatibility = '21'
-targetCompatibility = '21'
+
+// spring-boot-starter-test brings JUnit 5. Without this Gradle uses the JUnit 4
+// runner and silently skips every JUnit 5 test, so the build stays green while
+// testing nothing.
+tasks.named('test') {
+    useJUnitPlatform()
+}
 
 sourceSets {
     generated {
