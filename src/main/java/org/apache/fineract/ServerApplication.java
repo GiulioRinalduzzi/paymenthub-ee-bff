@@ -49,7 +49,10 @@ import org.springframework.web.filter.CorsFilter;
 import java.util.ArrayList;
 import java.util.List;
 
-@SpringBootApplication
+// org.mifos.g2pconnector comes from the former ph-ee-operations-g2p-service:
+// its controllers and services live outside org.apache.fineract, so component
+// scanning has to be told about them
+@SpringBootApplication(scanBasePackages = { "org.apache.fineract", "org.mifos.g2pconnector" })
 @EnableConfigurationProperties
 @EnableAutoConfiguration(exclude = {DataSourceAutoConfiguration.class,
         DataSourceTransactionManagerAutoConfiguration.class,
