@@ -20,6 +20,23 @@ This repository holds the migrated `ph-ee-operations-app`.
 The application needs a MySQL server with the core schema (`tenants`) and one schema per
 tenant already created — the JDBC url does not create databases.
 
+Two things have to be done before `docker compose up`, or it will not come up:
+
+1. **Build the jar.** The image copies `build/libs/*.jar`, so without this the image
+   build fails with `lstat /build/libs: no such file or directory`.
+   ```
+   ./gradlew bootJar
+   ```
+2. **Create the schemas.** The compose file does not create them, and the app stops with
+   `Unknown database 'tenants'` on a fresh MySQL volume.
+   ```
+   docker compose up -d operations-mysql
+   docker compose exec operations-mysql mysql -uroot -pmysql \
+     -e "CREATE DATABASE tenants; CREATE DATABASE tn01; CREATE DATABASE tn02;"
+   ```
+
+Then:
+
 ```
 docker compose up
 ```
