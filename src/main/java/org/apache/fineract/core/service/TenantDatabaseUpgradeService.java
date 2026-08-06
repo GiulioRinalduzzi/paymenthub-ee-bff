@@ -28,6 +28,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
+import javax.sql.DataSource;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -101,15 +102,15 @@ public class TenantDatabaseUpgradeService {
                     placeholders.put("channelClientSecret", channelClientSecret);
                     placeholders.put("identityProviderResourceId", IDENTITY_PROVIDER_RESOURCE_ID); // add identity provider as aud claim
                     // Flyway moved to a fluent configure() API; baselineOnMigrate is the new name of initOnMigrate.
-                    // table("schema_version"): Flyway 2.x stored its history in schema_version, Flyway 10
-                    // defaults to flyway_schema_history. Without this, on an existing database the history
-                    // is not found and Flyway re-applies old migrations onto existing tables and fails.
+                    // The Flyway 2.x history table (schema_version) is converted to the Flyway 10 one
+                    // (flyway_schema_history) first: Flyway 10 can read the old table but cannot write to it.
+                    DataSource tenantDataSource = dataSourcePerTenantService.retrieveDataSource();
+                    FlywayHistoryTableUpgrade.upgradeIfNeeded(tenantDataSource);
                     final Flyway fw = Flyway.configure()
-                            .dataSource(dataSourcePerTenantService.retrieveDataSource())
+                            .dataSource(tenantDataSource)
                             .locations("sql/migrations/tenant")
                             .baselineOnMigrate(true)
                             .outOfOrder(true)
-                            .table("schema_version")
                             .placeholders(placeholders)
                             .load();
                     // repair() first: the history written by Flyway 2.x holds checksums computed
@@ -143,13 +144,14 @@ public class TenantDatabaseUpgradeService {
     }
 
     private void flywayDefaultSchema() {
+        DataSource coreDataSource = dataSourcePerTenantService.retrieveDataSource();
+        // convert the Flyway 2.x history table if this database has one (see flywayTenants)
+        FlywayHistoryTableUpgrade.upgradeIfNeeded(coreDataSource);
         final Flyway fw = Flyway.configure()
-                .dataSource(dataSourcePerTenantService.retrieveDataSource())
+                .dataSource(coreDataSource)
                 .locations("sql/migrations/core")
                 .baselineOnMigrate(true)
                 .outOfOrder(true)
-                // keep reading the Flyway 2.x history table (see flywayTenants)
-                .table("schema_version")
                 .load();
         // repair() re-computes Flyway 2.x checksums; no-op on a fresh database (see flywayTenants)
         fw.repair();

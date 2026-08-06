@@ -13,6 +13,11 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtValidators;
@@ -38,8 +43,9 @@ import java.util.List;
  * - rest.authorization.enabled = false -> /api/v1/** is open
  * - rest.authorization.enabled = true  -> per-endpoint SpEL rules from
  *   rest.authorization.settings, everything else fully authenticated
- * - JWTs are verified with the same RSA public key (jwt_pub.pem) and the same
- *   per-tenant audience check (AudienceVerifier)
+ * - JWTs are verified with the same RSA public key (jwt_pub.pem), the same
+ *   "identity-provider" resource id check and the same per-tenant audience
+ *   check (AudienceVerifier)
  * - the "authorities" claim of the token becomes the granted authorities,
  *   with no prefix (same as the old JwtAccessTokenConverter contract)
  */
@@ -72,14 +78,27 @@ public class ResourceServerConfig {
         if (!isRestAuthEnabled) {
             // .anonymous() stays enabled here, exactly like the old config:
             // without it every request fails with 401 regardless of permissions
+            //
+            // anyRequest().permitAll() is not a relaxation, it keeps the old
+            // behaviour: the old config listed only /api/v1/** and had no
+            // anyRequest() rule at all, and a request matching no rule was let
+            // through. Anything stricter here breaks the kubernetes probes on
+            // /actuator/health/liveness and /actuator/health/readiness, which
+            // never carry a token.
             http.authorizeHttpRequests(auth -> auth
-                    .requestMatchers("/oauth/token").permitAll()
+                    .requestMatchers("/oauth/token", "/oauth/token_key").permitAll()
+                    // check_token was isAuthenticated() in the old AuthorizationServerConfig,
+                    // and that chain was separate from this one, so it did not follow
+                    // rest.authorization.enabled. Keep it closed here too.
+                    .requestMatchers("/oauth/check_token").authenticated()
                     .requestMatchers("/api/v1/**").permitAll()
-                    .anyRequest().authenticated());
+                    .anyRequest().permitAll());
         } else {
             http.anonymous(AbstractHttpConfigurer::disable);
             http.authorizeHttpRequests(auth -> {
-                auth.requestMatchers("/oauth/token").permitAll();
+                // token_key was permitAll in the old AuthorizationServerConfig; check_token was
+                // isAuthenticated(), which the anyRequest().fullyAuthenticated() below covers
+                auth.requestMatchers("/oauth/token", "/oauth/token_key").permitAll();
                 List<EndpointSetting> settings = authProperties.getSettings();
                 if (settings.isEmpty()) {
                     throw new RuntimeException("Configuration property rest.authorization.settings can not be empty!");
@@ -111,8 +130,28 @@ public class ResourceServerConfig {
     @Bean
     public JwtDecoder jwtDecoder(AudienceVerifier audienceVerifier) {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(PemUtils.readPublicKey("jwt_pub.pem")).build();
-        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefault(), audienceVerifier));
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                JwtValidators.createDefault(), resourceIdValidator(), audienceVerifier));
         return decoder;
+    }
+
+    /**
+     * Replaces the resourceId(IDENTITY_PROVIDER_RESOURCE_ID) call of the old
+     * ResourceServerSecurityConfigurer. The old stack checked this in
+     * OAuth2AuthenticationManager, with the same rule kept here: a token is
+     * rejected only if it carries an audience list that does not contain
+     * "identity-provider". A token with no audience at all was accepted before
+     * and still is.
+     */
+    private static OAuth2TokenValidator<Jwt> resourceIdValidator() {
+        return jwt -> {
+            List<String> audiences = jwt.getAudience();
+            if (audiences == null || audiences.isEmpty() || audiences.contains(IDENTITY_PROVIDER_RESOURCE_ID)) {
+                return OAuth2TokenValidatorResult.success();
+            }
+            String message = "Token audiences " + audiences + " do not contain the resource id " + IDENTITY_PROVIDER_RESOURCE_ID;
+            return OAuth2TokenValidatorResult.failure(new OAuth2Error(OAuth2ErrorCodes.INVALID_TOKEN, message, null));
+        };
     }
 
     @Bean

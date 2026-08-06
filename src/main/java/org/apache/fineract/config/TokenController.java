@@ -27,6 +27,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.security.oauth2.jwt.JwtException;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -38,12 +39,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * Replacement for the /oauth/token endpoint of the discontinued Spring
+ * Replacement for the /oauth/token, /oauth/token_key and /oauth/check_token
+ * endpoints of the discontinued Spring
  * Security OAuth2 authorization server (spring-security-oauth2 2.4.1). That
  * stack does not exist for Spring Boot 3, and its successor
  * (spring-authorization-server) dropped the password grant that the
@@ -102,7 +105,7 @@ public class TokenController {
                         .authenticate(new UsernamePasswordAuthenticationToken(params.get("username"), params.get("password")));
                 List<String> authorities = toAuthorityNames(user.getAuthorities());
                 return tokenResponse(client, buildAccessToken(client, user.getName(), authorities, true),
-                        buildRefreshToken(client, user.getName()));
+                        buildRefreshToken(client, user.getName()).getTokenValue());
             }
 
             if ("refresh_token".equals(grantType)) {
@@ -110,8 +113,12 @@ public class TokenController {
                 String username = refreshToken.getClaimAsString("user_name");
                 UserDetails user = userDetailsService.loadUserByUsername(username);
                 List<String> authorities = toAuthorityNames(user.getAuthorities());
+                // the refresh token that came in is handed back unchanged, like the old
+                // DefaultTokenServices did (reuseRefreshToken is true by default). Issuing a
+                // new one here would push its expiry forward at every refresh, so a session
+                // could be kept alive for ever instead of ending after refresh_token_validity.
                 return tokenResponse(client, buildAccessToken(client, username, authorities, true),
-                        buildRefreshToken(client, username));
+                        refreshToken.getTokenValue());
             }
 
             if ("client_credentials".equals(grantType)) {
@@ -132,6 +139,45 @@ public class TokenController {
         } catch (Exception e) {
             logger.error("Token request failed", e);
             return errorResponse(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    /**
+     * Same as the old TokenKeyEndpoint: publishes the public half of the signing
+     * key so other services can verify the JWTs themselves. It was permitAll in
+     * the old AuthorizationServerConfig and stays open here.
+     */
+    @GetMapping(value = "/oauth/token_key", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> tokenKey() {
+        JSONObject body = new JSONObject();
+        body.put("alg", "SHA256withRSA");
+        body.put("value", PemUtils.readPublicKeyPem("jwt_pub.pem"));
+        return ResponseEntity.ok(body.toString());
+    }
+
+    /**
+     * Same as the old CheckTokenEndpoint: returns the claims of a token, or 400
+     * with an invalid_token error. It required authentication before
+     * (checkTokenAccess("isAuthenticated()")) and still does: ResourceServerConfig
+     * closes it in both branches of rest.authorization.enabled.
+     */
+    @PostMapping(value = "/oauth/check_token", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> checkToken(@RequestParam("token") String token) {
+        try {
+            Jwt jwt = jwtDecoder.decode(token);
+            Map<String, Object> claims = new LinkedHashMap<>(jwt.getClaims());
+            // the old endpoint returned iat/exp as epoch seconds, Jwt holds them as Instant
+            for (Map.Entry<String, Object> claim : claims.entrySet()) {
+                if (claim.getValue() instanceof Instant) {
+                    claim.setValue(((Instant) claim.getValue()).getEpochSecond());
+                }
+            }
+            return ResponseEntity.ok(new JSONObject(claims).toString());
+        } catch (JwtException e) {
+            JSONObject body = new JSONObject();
+            body.put("error", "invalid_token");
+            body.put("error_description", e.getMessage());
+            return new ResponseEntity<>(body.toString(), HttpStatus.BAD_REQUEST);
         }
     }
 
@@ -227,12 +273,12 @@ public class TokenController {
         return jwtEncoder.encode(JwtEncoderParameters.from(JwsHeader.with(SignatureAlgorithm.RS256).build(), claims));
     }
 
-    private ResponseEntity<String> tokenResponse(Map<String, Object> client, Jwt accessToken, Jwt refreshToken) {
+    private ResponseEntity<String> tokenResponse(Map<String, Object> client, Jwt accessToken, String refreshToken) {
         JSONObject body = new JSONObject();
         body.put("access_token", accessToken.getTokenValue());
         body.put("token_type", "bearer");
         if (refreshToken != null) {
-            body.put("refresh_token", refreshToken.getTokenValue());
+            body.put("refresh_token", refreshToken);
         }
         body.put("expires_in", accessToken.getExpiresAt().getEpochSecond() - Instant.now().getEpochSecond());
         body.put("scope", String.join(" ", commaSeparated(client.get("scope"))));

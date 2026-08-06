@@ -39,11 +39,13 @@ security:
     enable: false
 
 spring:
-  resources:
-    add-mappings: false
-  mvc:
-    favicon:
-      enabled: false
+  # was spring.resources.add-mappings in Spring Boot 2.1; the key moved under
+  # spring.web in Spring Boot 2.4 and the old one is now ignored without warning.
+  # spring.mvc.favicon.enabled is gone for good: Spring Boot no longer serves a
+  # favicon of its own, so there is nothing left to disable.
+  web:
+    resources:
+      add-mappings: false
   jmx:
     enabled: false
 
@@ -61,6 +63,9 @@ rest:
 logging:
   level:
     ROOT: ERROR
+    # the one-off rewrite of the Flyway 2.x history table would otherwise be
+    # invisible, ROOT hides everything below ERROR
+    org.apache.fineract.core.service.FlywayHistoryTableUpgrade: INFO
   # pattern was wrongly nested under logging.level: Spring Boot 2.1 silently
   # ignored the invalid key, Spring Boot 3 fails to start on it.
   pattern:
