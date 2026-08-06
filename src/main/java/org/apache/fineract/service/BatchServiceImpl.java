@@ -219,7 +219,6 @@ public class BatchServiceImpl implements BatchService{
     }
 
     private void updatePaymentDetailBatchInfo( Batch batch, PaymentBatchDetail response){
-        log.info("Inside batch");
         response.setBatchId(batch.getBatchId());
         response.setPayerFsp(batch.getPayerFsp());
         response.setTotalBatchAmount(batch.getTotalAmount());

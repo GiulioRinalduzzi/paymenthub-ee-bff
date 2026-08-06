@@ -273,7 +273,6 @@ public class BatchDbServiceImpl implements BatchDbService {
                                                                      long totalAmount, long totalApprovedCount,
                                                                      long totalApprovedAmount,
                                                                      long totalSubBatchesCreated, List<Batch> batches) {
-        log.info("Inside getBatchPaginatedResponseInstance");
         log.info("TotalBatch: {}, TotalTransactions: {}, Total Amount: {}, Batches: {}",
                 totalBatches, totalTransactions, totalAmount, batches.size());
         BatchPaginatedResponse batchPaginatedResponse = new BatchPaginatedResponse();
