@@ -103,7 +103,14 @@ public class ServerApplication {
     public FilterRegistrationBean corsFilter() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowCredentials(true);
-        config.addAllowedOrigin("*");
+        // addAllowedOriginPattern, not addAllowedOrigin: since Spring 5.3 a literal
+        // "*" origin together with allowCredentials=true makes CorsConfiguration
+        // throw, so with Spring 6 every request carrying an Origin header answered
+        // 500 - which is every request from the operations web console, login
+        // included. Spring 5.1 (Spring Boot 2.1.9) still accepted it, so the same
+        // code worked before the migration. allowedOriginPattern echoes the request
+        // Origin back and keeps exactly the old behaviour.
+        config.addAllowedOriginPattern("*");
         config.addAllowedHeader("*");
         config.addAllowedMethod("*");
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
