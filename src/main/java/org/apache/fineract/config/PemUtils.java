@@ -27,6 +27,18 @@ public final class PemUtils {
     private PemUtils() {
     }
 
+    /**
+     * The PEM file as it is on disk. Used by /oauth/token_key, which published
+     * the verifier key in this exact form in the old stack.
+     */
+    public static String readPublicKeyPem(String classpathFile) {
+        try {
+            return readPem(classpathFile).trim();
+        } catch (IOException e) {
+            throw new IllegalStateException("Cannot read " + classpathFile, e);
+        }
+    }
+
     public static RSAPublicKey readPublicKey(String classpathFile) {
         try {
             byte[] der = readPemBody(classpathFile);
