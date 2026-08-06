@@ -37,6 +37,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -243,7 +244,11 @@ public class TokenController {
         if (stored == null || stored.isEmpty()) {
             return; // public client with no secret
         }
-        boolean matches = stored.startsWith("$2") ? passwordEncoder.matches(provided, stored) : stored.equals(provided);
+        // the plaintext branch is live, not theoretical: V26__add_oauth_clients.sql
+        // seeds channel-<tenant> with a plaintext secret, only "client" was bcrypted
+        // in V40. MessageDigest.isEqual so the comparison is constant time.
+        boolean matches = stored.startsWith("$2") ? passwordEncoder.matches(provided, stored)
+                : MessageDigest.isEqual(stored.getBytes(StandardCharsets.UTF_8), provided.getBytes(StandardCharsets.UTF_8));
         if (!matches) {
             throw new BadCredentialsException("Bad client credentials");
         }

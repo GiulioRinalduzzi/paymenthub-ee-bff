@@ -3,29 +3,30 @@
  */
 plugins {
     id 'java'
-    id 'maven-publish'
     id 'eclipse'
     id 'org.springframework.boot' version '3.4.4'
     id 'io.spring.dependency-management' version '1.1.6'
 }
 
-// Explicitly set the main class to avoid ASM version issues with JDK 17
-bootJar {
-    mainClass = 'org.apache.fineract.ServerApplication'
+// The build has to run on Java 21: Error Prone and connector-common break on 23,
+// and without a toolchain that is a confusing compile error instead of a clear one.
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
 }
 
-// Alternative syntax for newer Gradle versions
+bootJar {
+    mainClass = 'org.apache.fineract.ServerApplication'
+    enabled = true
+    archiveClassifier = '' // so bootJar replaces the default jar
+}
+
 springBoot {
     mainClass = 'org.apache.fineract.ServerApplication'
 }
 
-// Make sure we're building a proper Spring Boot JAR
-bootJar {
-    enabled = true
-    archiveClassifier = '' // This ensures bootJar replaces the default jar
-}
-
-// Disable the default jar task to avoid confusion
+// this is a deployable application, the fat jar is the only artifact
 jar {
     enabled = false
 }
@@ -68,6 +69,11 @@ dependencies {
     implementation 'org.eclipse.persistence:org.eclipse.persistence.jpa'
     annotationProcessor 'org.hibernate.orm:hibernate-jpamodelgen'
     implementation 'jakarta.persistence:jakarta.persistence-api'
+    // TODO move these six to the BOM. They are carried over from the pre-migration
+    // build.gradle and are the only versions still written by hand here, so the "do
+    // not hardcode managed versions" rule above does not hold for them yet. Two are
+    // worth attention when it happens: commons-io 2.4 is from 2013 and carries
+    // CVE-2021-29425, and junit 4.11 predates the JUnit 4 security fix.
     implementation 'joda-time:joda-time:2.10.6'
     implementation 'org.apache.commons:commons-lang3'
     implementation 'com.zaxxer:HikariCP'
@@ -107,13 +113,12 @@ sourceSets {
     }
 }
 
-publishing {
-    publications {
-        maven(MavenPublication) {
-            from(components.java)
-        }
-    }
-}
+// No publishing block: this is a deployable leaf application, consumed as a Docker
+// image, not as a Maven dependency. It also could not publish even if we wanted to -
+// components.java is built around the disabled jar task, and Gradle refuses to
+// generate metadata for a component that depends on an enforcedPlatform, because
+// forced versions would leak to consumers. A published library would have to use
+// platform() instead; see the BOM notes.
 
 tasks.withType(JavaCompile) {
     options.encoding = 'UTF-8'

@@ -43,6 +43,17 @@ import java.sql.Statement;
  * of being dropped, so a failed upgrade can be inspected.
  *
  * Does nothing on a fresh database, and nothing if it has already run.
+ *
+ * How a failure here surfaces depends on which schema it happens in, and the two
+ * are not the same. TenantDatabaseUpgradeService.flywayDefaultSchema() lets the
+ * exception escape, so a problem in the core schema stops startup. Its
+ * flywayTenants() loop catches Exception per tenant and only logs it, so on a
+ * tenant schema the "interrupted conversion, restore from the backup" guard below
+ * degrades to one ERROR line: the context starts, the readiness probe goes green
+ * and that tenant serves traffic against a schema whose migration state is
+ * unknown. The catch predates this class and widening it is a startup-behaviour
+ * decision for a multi-tenant deployment, not something to change inside a
+ * migration - but anyone reading the guard should know it can be swallowed.
  */
 final class FlywayHistoryTableUpgrade {
 
