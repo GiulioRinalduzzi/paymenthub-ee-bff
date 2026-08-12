@@ -39,21 +39,44 @@ import java.sql.Statement;
  * existing database fails. Flyway used to do this conversion by itself (up to
  * Flyway 4), that code was removed, so we do it here before calling migrate().
  *
- * The old table is kept under the name "schema_version_flyway2_backup" instead
- * of being dropped, so a failed upgrade can be inspected.
+ * The old table is COPIED, never renamed or dropped: "schema_version" is left
+ * exactly as it was. That matters for two reasons beyond keeping a backup.
  *
- * Does nothing on a fresh database, and nothing if it has already run.
+ * First, this application is not always the only thing using the schema. The build
+ * being replaced is one of them: on gazelle the deployed image is still a Flyway 2
+ * build, so during and after a rollout "schema_version" is a live table, not a
+ * leftover. paymenthub-ee-auth reads the same schemas as well.
+ *
+ * This is not hypothetical. An earlier version of this class renamed the table, and
+ * running that build on gazelle took the history away from the deployed one: on the
+ * next restart Flyway 2 found no "schema_version", created a fresh one and
+ * baselined it, so the tenant schemas went from a 44-row history to a 2-row one and
+ * the old build believed schemas that are at version 44 were at version 2. It would
+ * have replayed 42 migrations over objects that already exist. Recovered from the
+ * backup table, but nothing about it was visible until a restart.
+ *
+ * Second, it makes the conversion reversible. Rolling an image back to a Flyway 2
+ * build finds its history where it left it.
+ *
+ * Does nothing on a fresh database, and nothing if it has already run: the check
+ * for "flyway_schema_history" comes first, so a second start is a no-op. Nothing
+ * here removes "schema_version", so there is no window in which neither table
+ * exists and no interrupted state to recover from.
+ *
+ * Copying is not enough to make this app safe on a schema it does not own - the
+ * migration numbers still collide, see the comment in
+ * TenantDatabaseUpgradeService - but it does mean the collision damages only this
+ * app and not the one that owns the schema.
  *
  * How a failure here surfaces depends on which schema it happens in, and the two
  * are not the same. TenantDatabaseUpgradeService.flywayDefaultSchema() lets the
  * exception escape, so a problem in the core schema stops startup. Its
  * flywayTenants() loop catches Exception per tenant and only logs it, so on a
- * tenant schema the "interrupted conversion, restore from the backup" guard below
- * degrades to one ERROR line: the context starts, the readiness probe goes green
- * and that tenant serves traffic against a schema whose migration state is
- * unknown. The catch predates this class and widening it is a startup-behaviour
- * decision for a multi-tenant deployment, not something to change inside a
- * migration - but anyone reading the guard should know it can be swallowed.
+ * tenant schema a failure degrades to one ERROR line: the context starts, the
+ * readiness probe goes green and that tenant serves traffic against a schema whose
+ * migration state is unknown. The catch predates this class and widening it is a
+ * startup-behaviour decision for a multi-tenant deployment, not something to change
+ * inside a migration - but anyone reading this should know it can be swallowed.
  */
 final class FlywayHistoryTableUpgrade {
 
@@ -61,7 +84,6 @@ final class FlywayHistoryTableUpgrade {
 
     private static final String LEGACY_TABLE = "schema_version";
     private static final String CURRENT_TABLE = "flyway_schema_history";
-    private static final String BACKUP_TABLE = "schema_version_flyway2_backup";
 
     private FlywayHistoryTableUpgrade() {
     }
@@ -80,48 +102,42 @@ final class FlywayHistoryTableUpgrade {
                 return false; // already on the Flyway 10 layout
             }
             if (!tableExists(connection, schema, LEGACY_TABLE)) {
-                if (tableExists(connection, schema, BACKUP_TABLE)) {
-                    // the backup exists but neither history table does, so a previous
-                    // conversion was interrupted after the rename. Returning here would
-                    // look like a fresh database to Flyway, which would then baseline and
-                    // re-apply every migration on a schema that already has the objects.
-                    // Fail loudly instead: the history is recoverable from the backup.
-                    throw new IllegalStateException("Schema " + schema + " has " + BACKUP_TABLE + " but no "
-                            + CURRENT_TABLE + " and no " + LEGACY_TABLE + ": a previous history conversion was "
-                            + "interrupted. Restore the history from " + BACKUP_TABLE + " before starting again.");
-                }
                 return false; // fresh database, Flyway will create its own table
             }
             if (columnExists(connection, schema, LEGACY_TABLE, "version_rank")) {
-                // the root log level is ERROR, so application.yml raises this class to INFO:
-                // a one-off rewrite of the history table has to be visible in the logs
-                logger.info("Found a Flyway 2.x history table in schema {}, converting it to {}", schema, CURRENT_TABLE);
+                logger.info("Found a Flyway 2.x history table in schema {}, copying it to {}", schema, CURRENT_TABLE);
                 convertLegacyTable(connection);
             } else {
                 // "schema_version" written by a recent Flyway (a run of this app
                 // that still passed .table("schema_version")): layout is already
-                // right, only the name is old.
-                logger.info("Renaming {} to {} in schema {}", LEGACY_TABLE, CURRENT_TABLE, schema);
+                // right, only the name is old. Untested path - this app has never
+                // written that table - so it copies like the branch above rather
+                // than doing anything clever.
+                logger.info("Copying {} to {} in schema {}", LEGACY_TABLE, CURRENT_TABLE, schema);
                 try (Statement statement = connection.createStatement()) {
-                    statement.execute("RENAME TABLE " + LEGACY_TABLE + " TO " + CURRENT_TABLE);
+                    statement.execute("CREATE TABLE " + CURRENT_TABLE + " LIKE " + LEGACY_TABLE);
+                    statement.execute("INSERT INTO " + CURRENT_TABLE + " SELECT * FROM " + LEGACY_TABLE);
                 }
                 commitIfNeeded(connection);
             }
             return true;
         } catch (SQLException e) {
+            // If two instances start at the same moment on the same schema, one wins the
+            // CREATE TABLE and the other lands here. On a tenant schema flywayTenants()
+            // catches it; on the core schema nothing does, so that instance fails to start
+            // and the next attempt finds the table already there and returns false. It
+            // recovers by itself, but the log line to look for is this one, not a
+            // corrupted history.
             throw new IllegalStateException("Cannot upgrade the Flyway history table", e);
         }
     }
 
     private static void convertLegacyTable(Connection connection) throws SQLException {
-        // the cleanup below must only remove a table this call created, and only
-        // before the rename. If two instances start together they both get here, the
-        // CREATE TABLE of the loser fails, and dropping on the way out would delete
-        // the history the winner has just converted. After the rename there is
-        // nothing safe to undo either: MySQL commits implicitly on DDL, so by then
-        // the copy is already durable.
+        // the cleanup below must only remove a table this call created. If two
+        // instances start together they both get here, the CREATE TABLE of the loser
+        // fails, and dropping on the way out would delete the table the winner has
+        // just filled.
         boolean tableCreated = false;
-        boolean legacyRenamed = false;
         try (Statement statement = connection.createStatement()) {
             try {
                 // same DDL Flyway 10 itself uses for MySQL
@@ -149,12 +165,10 @@ final class FlywayHistoryTableUpgrade {
                         + " CASE WHEN type = 'INIT' THEN 'BASELINE' ELSE type END,"
                         + " script, checksum, installed_by, installed_on, execution_time, success"
                         + " FROM " + LEGACY_TABLE);
-                statement.execute("RENAME TABLE " + LEGACY_TABLE + " TO " + BACKUP_TABLE);
-                legacyRenamed = true;
                 commitIfNeeded(connection);
             } catch (SQLException e) {
                 // leave no half-built table behind: the next start must be able to retry
-                if (tableCreated && !legacyRenamed) {
+                if (tableCreated) {
                     try {
                         if (!connection.getAutoCommit()) {
                             connection.rollback();
