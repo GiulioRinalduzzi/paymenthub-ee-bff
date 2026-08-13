@@ -83,4 +83,4 @@ Java 21 and Gradle (use the wrapper). Library versions come from
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md).
+See [contributing.md](contributing.md), our [Code of Conduct](CODE_OF_CONDUCT.md) and the [security policy](security.md).
