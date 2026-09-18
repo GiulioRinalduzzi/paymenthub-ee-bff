@@ -24,7 +24,7 @@ import org.apache.fineract.organisation.tenant.TenantServerConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
-import org.springframework.beans.factory.annotation.Value;
+import org.apache.fineract.config.properties.FineractDatasourceProperties;
 import org.springframework.stereotype.Service;
 
 import javax.sql.DataSource;
@@ -38,29 +38,11 @@ public class DataSourcePerTenantService implements DisposableBean {
     private final Logger logger = LoggerFactory.getLogger(this.getClass());
     private final Map<Long, DataSource> tenantToDataSourceMap = new HashMap<>();
 
-    @Value("${fineract.datasource.core.port}")
-    private int defaultPort;
+    private final FineractDatasourceProperties properties;
 
-    @Value("${fineract.datasource.core.host}")
-    private String defaultHostname;
-
-    @Value("${fineract.datasource.core.schema}")
-    private String defaultSchema;
-
-    @Value("${fineract.datasource.core.username}")
-    private String defaultUsername;
-
-    @Value("${fineract.datasource.core.password}")
-    private String defaultPassword;
-
-    @Value("${fineract.datasource.common.protocol}")
-    private String jdbcProtocol;
-
-    @Value("${fineract.datasource.common.subprotocol}")
-    private String jdbcSubprotocol;
-
-    @Value("${fineract.datasource.common.driverclass_name}")
-    private String driverClass;
+    public DataSourcePerTenantService(FineractDatasourceProperties properties) {
+        this.properties = properties;
+    }
 
     public DataSource retrieveDataSource() {
         DataSource tenantDataSource;
@@ -82,11 +64,11 @@ public class DataSourcePerTenantService implements DisposableBean {
                     tenantDataSource = this.tenantToDataSourceMap.get(defaultConnectionKey);
                 } else {
                     TenantServerConnection defaultConnection = new TenantServerConnection();
-                    defaultConnection.setSchemaServer(defaultHostname);
-                    defaultConnection.setSchemaServerPort(String.valueOf(defaultPort));
-                    defaultConnection.setSchemaName(defaultSchema);
-                    defaultConnection.setSchemaUsername(defaultUsername);
-                    defaultConnection.setSchemaPassword(defaultPassword);
+                    defaultConnection.setSchemaServer(properties.core().host());
+                    defaultConnection.setSchemaServerPort(String.valueOf(properties.core().port()));
+                    defaultConnection.setSchemaName(properties.core().schema());
+                    defaultConnection.setSchemaUsername(properties.core().username());
+                    defaultConnection.setSchemaPassword(properties.core().password());
                     tenantDataSource = createNewDataSourceFor(defaultConnection);
                     this.tenantToDataSourceMap.put(defaultConnectionKey, tenantDataSource);
                 }
@@ -100,14 +82,14 @@ public class DataSourcePerTenantService implements DisposableBean {
         HikariConfig config = new HikariConfig();
         config.setUsername(tenant.getSchemaUsername());
         config.setPassword(tenant.getSchemaPassword());
-        config.setJdbcUrl(createJdbcUrl(jdbcProtocol, jdbcSubprotocol, tenant.getSchemaServer(),
+        config.setJdbcUrl(createJdbcUrl(properties.common().protocol(), properties.common().subprotocol(), tenant.getSchemaServer(),
                 Integer.parseInt(tenant.getSchemaServerPort()), tenant.getSchemaName()));
         config.setAutoCommit(false);
         config.setConnectionInitSql("SELECT 1");
         config.setValidationTimeout(30000);
         config.setConnectionTestQuery("SELECT 1");
         config.setConnectionTimeout(30000);
-        config.setDriverClassName(driverClass);
+        config.setDriverClassName(properties.common().driverclassName());
         config.setIdleTimeout(600000);
         config.setMaximumPoolSize(20);
         config.setMinimumIdle(5);

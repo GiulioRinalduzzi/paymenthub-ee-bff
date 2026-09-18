@@ -1,7 +1,7 @@
 package org.apache.fineract.file.config;
 
 import com.azure.storage.blob.BlobClientBuilder;
-import org.springframework.beans.factory.annotation.Value;
+import org.apache.fineract.config.properties.CloudProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -9,8 +9,11 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class AzureStorageConfig {
 
-    @Value("${cloud.azure.blob.connection-string}")
-    String connectionString;
+    private final CloudProperties properties;
+
+    public AzureStorageConfig(CloudProperties properties) {
+        this.properties = properties;
+    }
 
     @Bean
     @ConditionalOnProperty(
@@ -18,7 +21,7 @@ public class AzureStorageConfig {
             havingValue = "true")
     public BlobClientBuilder getClient() {
         BlobClientBuilder client = new BlobClientBuilder();
-        client.connectionString(connectionString);
+        client.connectionString(properties.azure().blob().connectionString());
         return client;
     }
 

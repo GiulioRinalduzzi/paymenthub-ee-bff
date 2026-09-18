@@ -24,6 +24,8 @@ import org.apache.fineract.organisation.tenant.TenantServerConnectionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.apache.fineract.config.properties.FineractDatasourceProperties;
+import org.apache.fineract.config.properties.TokenProperties;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -46,38 +48,11 @@ public class TenantDatabaseUpgradeService {
     @Autowired
     private DataSourcePerTenantService dataSourcePerTenantService;
 
-    @Value("${fineract.datasource.core.host}")
-    private String hostname;
+    @Autowired
+    private FineractDatasourceProperties datasourceProperties;
 
-    @Value("${fineract.datasource.core.port}")
-    private int port;
-
-    @Value("${fineract.datasource.core.username}")
-    private String username;
-
-    @Value("${fineract.datasource.core.password}")
-    private String password;
-
-    @Value("${fineract.datasource.common.protocol}")
-    private String jdbcProtocol;
-
-    @Value("${fineract.datasource.common.subprotocol}")
-    private String jdbcSubprotocol;
-
-    @Value("${fineract.datasource.common.driverclass_name}")
-    private String driverClass;
-
-    @Value("${token.user.access-validity-seconds}")
-    private String userTokenAccessValiditySeconds;
-
-    @Value("${token.user.refresh-validity-seconds}")
-    private String userTokenRefreshValiditySeconds;
-
-    @Value("${token.client.access-validity-seconds}")
-    private String clientAccessTokenValidity;
-
-    @Value("${token.client.channel.secret}")
-    private String channelClientSecret;
+    @Autowired
+    private TokenProperties tokenProperties;
 
     @Value("#{'${tenants}'.split(',')}")
     private List<String> tenants;
@@ -96,10 +71,10 @@ public class TenantDatabaseUpgradeService {
                     ThreadLocalContextUtil.setTenant(tenant);
                     Map<String, String> placeholders = new HashMap<>();
                     placeholders.put("tenantDatabase", tenant.getSchemaName()); // add tenant as aud claim
-                    placeholders.put("userAccessTokenValidity", userTokenAccessValiditySeconds);
-                    placeholders.put("userRefreshTokenValidity", userTokenRefreshValiditySeconds);
-                    placeholders.put("clientAccessTokenValidity", clientAccessTokenValidity);
-                    placeholders.put("channelClientSecret", channelClientSecret);
+                    placeholders.put("userAccessTokenValidity", String.valueOf(tokenProperties.user().accessValiditySeconds()));
+                    placeholders.put("userRefreshTokenValidity", String.valueOf(tokenProperties.user().refreshValiditySeconds()));
+                    placeholders.put("clientAccessTokenValidity", String.valueOf(tokenProperties.client().accessValiditySeconds()));
+                    placeholders.put("channelClientSecret", tokenProperties.client().channel().secret());
                     placeholders.put("identityProviderResourceId", IDENTITY_PROVIDER_RESOURCE_ID); // add identity provider as aud claim
                     // Flyway moved to a fluent configure() API; baselineOnMigrate is the new name of initOnMigrate.
                     // The Flyway 2.x history table (schema_version) is converted to the Flyway 10 one
@@ -138,10 +113,10 @@ public class TenantDatabaseUpgradeService {
             if(existingTenant == null) {
                 TenantServerConnection tenantServerConnection = new TenantServerConnection();
                 tenantServerConnection.setSchemaName(tenant);
-                tenantServerConnection.setSchemaServer(hostname);
-                tenantServerConnection.setSchemaServerPort(String.valueOf(port));
-                tenantServerConnection.setSchemaUsername(username);
-                tenantServerConnection.setSchemaPassword(password);
+                tenantServerConnection.setSchemaServer(datasourceProperties.core().host());
+                tenantServerConnection.setSchemaServerPort(String.valueOf(datasourceProperties.core().port()));
+                tenantServerConnection.setSchemaUsername(datasourceProperties.core().username());
+                tenantServerConnection.setSchemaPassword(datasourceProperties.core().password());
                 tenantServerConnection.setAutoUpdateEnabled(true);
                 repository.saveAndFlush(tenantServerConnection);
             }

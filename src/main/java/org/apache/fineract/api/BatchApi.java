@@ -11,9 +11,9 @@ import org.apache.fineract.response.SubBatchSummary;
 import org.apache.fineract.service.BatchDbService;
 import org.apache.fineract.service.BatchService;
 import org.apache.fineract.utils.DateUtil;
+import org.apache.fineract.config.properties.ApplicationProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -69,8 +69,8 @@ public class BatchApi {
     @Autowired
     private BatchDbService batchDbService;
 
-    @Value("${application.bucket-name}")
-    private String bucketName;
+    @Autowired
+    private ApplicationProperties applicationProperties;
     @Autowired
     private BatchService batchService;
 
@@ -483,7 +483,7 @@ public class BatchApi {
                 bw.newLine();
             }
             bw.flush();
-            return fileTransferService.uploadFile(tempFile, bucketName);
+            return fileTransferService.uploadFile(tempFile, applicationProperties.bucketName());
         } catch (Exception e) {
             System.err.format("Exception: %s%n", e);
         }

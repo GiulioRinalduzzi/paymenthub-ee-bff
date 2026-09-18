@@ -75,7 +75,10 @@ cloud:
   aws:
     enabled: true
     minio-public-host: "http://minio.sandbox.mifos.io"
-    s3BaseUrl: "https://s3.ap-south-1.amazonaws.com"
+    # was s3BaseUrl: a capital letter in the middle is not a valid configuration
+    # property name, so the binder rejects it. CLOUD_AWS_S3BASEURL, which is what
+    # the deployment sets, matches this spelling too.
+    s3-base-url: "https://s3.ap-south-1.amazonaws.com"
     credentials:
       access-key: ${AWS_ACCESS_KEY:}
       secret-key: ${AWS_SECRET_KEY:}

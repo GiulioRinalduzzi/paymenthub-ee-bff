@@ -14,9 +14,9 @@ import com.mysql.cj.log.Log;
 import org.apache.commons.lang3.time.DateUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.apache.fineract.config.properties.CloudProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -30,35 +30,28 @@ import java.util.Date;
 @Qualifier("awsStorage")
 public class AwsFileTransferImpl implements FileTransferService {
     private Logger logger = LoggerFactory.getLogger(this.getClass());
-    @Value("${cloud.aws.credentials.access-key}")
-    private String accessKey;
-
-    @Value("${cloud.aws.credentials.secret-key}")
-    private String accessSecret;
-
-    @Value("${cloud.aws.region.static}")
-    private String region;
+    @Autowired
+    private CloudProperties properties;
     @Autowired
     private AmazonS3 s3Client;
-    @Value("${cloud.aws.s3BaseUrl}")
-    private String endpoint;
-    @Value("${cloud.aws.minio-public-host}")
-    private String minioPublicHost;
     private static final String MINIO = "minio";
     @Override
     public String uploadFile(File file, String bucketName) {
 
-        AWSCredentials credentials = new BasicAWSCredentials(accessKey, accessSecret);
+        AWSCredentials credentials = new BasicAWSCredentials(properties.aws().credentials().accessKey(),
+                properties.aws().credentials().secretKey());
 
         s3Client = AmazonS3ClientBuilder.standard().withCredentials(new AWSStaticCredentialsProvider(credentials))
-                .withPathStyleAccessEnabled(true).withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpoint, region))
+                .withPathStyleAccessEnabled(true)
+                .withEndpointConfiguration(
+                        new AwsClientBuilder.EndpointConfiguration(properties.aws().s3BaseUrl(), properties.aws().region().staticRegion()))
                 .build();
         String fileName = System.currentTimeMillis() + "_" + file.getName();
         logger.info("uploading file");
         s3Client.putObject(new PutObjectRequest(bucketName, fileName, file));
         String url = s3Client.getUrl(bucketName, fileName).toString();
         if(url.contains(MINIO)){
-            url = url.replaceFirst("^.*(?=/"+bucketName+")",minioPublicHost);
+            url = url.replaceFirst("^.*(?=/"+bucketName+")", properties.aws().minioPublicHost());
         }
         logger.debug("File access URL",url);
         file.delete();
@@ -67,9 +60,12 @@ public class AwsFileTransferImpl implements FileTransferService {
 
     @Override
     public byte[] downloadFile(String fileName, String bucketName) {
-        AWSCredentials credentials = new BasicAWSCredentials(accessKey, accessSecret);
+        AWSCredentials credentials = new BasicAWSCredentials(properties.aws().credentials().accessKey(),
+                properties.aws().credentials().secretKey());
         s3Client = AmazonS3ClientBuilder.standard().withCredentials(new AWSStaticCredentialsProvider(credentials))
-                .withPathStyleAccessEnabled(true).withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpoint, region))
+                .withPathStyleAccessEnabled(true)
+                .withEndpointConfiguration(
+                        new AwsClientBuilder.EndpointConfiguration(properties.aws().s3BaseUrl(), properties.aws().region().staticRegion()))
                 .build();
         S3Object s3Object = s3Client.getObject(bucketName, fileName);
         S3ObjectInputStream inputStream = s3Object.getObjectContent();
