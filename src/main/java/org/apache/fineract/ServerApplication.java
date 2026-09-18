@@ -18,7 +18,6 @@
  */
 package org.apache.fineract;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fineract.core.service.TenantAwareHeaderFilter;
 import org.apache.fineract.organisation.tenant.TenantServerConnectionRepository;
@@ -36,7 +35,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
-import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.ProviderManager;
@@ -77,19 +75,9 @@ public class ServerApplication {
         return builder.build();
     }
 
-    /**
-     * The API used to be served by a plain new ObjectMapper(). Declaring any ObjectMapper bean makes
-     * Spring Boot's Jackson auto-configuration back off, so that bean also decided how every request
-     * body is parsed and every response written, and every spring.jackson.* property was inert.
-     *
-     * The one difference that is visible on the wire is FAIL_ON_UNKNOWN_PROPERTIES: a plain mapper
-     * has it on, Boot's has it off, so a request body carrying an unknown field is a 400 today. That
-     * is kept, explicitly, rather than relaxed as a side effect of this change - whether the API
-     * should accept unknown fields is a decision for the team, not a refactor.
-     */
     @Bean
-    public ObjectMapper mapper(Jackson2ObjectMapperBuilder builder) {
-        return builder.build().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+    public ObjectMapper mapper() {
+        return new ObjectMapper();
     }
 
     @Bean
