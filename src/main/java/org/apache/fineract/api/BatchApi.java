@@ -28,7 +28,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.text.DecimalFormat;
@@ -134,7 +138,7 @@ public class BatchApi {
             httpServletResponse.setStatus(200);
             return batchPaginatedResponse;
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error listing batches", e);
             httpServletResponse.setStatus(400);
             return null;
         }
@@ -310,7 +314,6 @@ public class BatchApi {
         response.setCreatedAt("" + batch.getStartedAt());
         response.setModes(modes);
         response.setPurpose("Unknown purpose");
-        System.out.println("Batch details generated for batchId: " + response.getSuccessPercentage());
 
         if (batch.getCompleted().longValue() == batch.getTotalTransactions().longValue()) {
             response.setStatus("COMPLETED");
@@ -451,9 +454,19 @@ public class BatchApi {
 
     private String createDetailsFile(List<Transfer> transfers) {
         String CSV_SEPARATOR = ",";
-        File tempFile = new File(System.currentTimeMillis() + "_response.csv");
+        // The file used to be created in the working directory and left there after the
+        // upload, so every export grew the container filesystem until the pod restarted.
+        File tempFile;
+        try {
+            tempFile = File.createTempFile(System.currentTimeMillis() + "_response", ".csv");
+        } catch (IOException e) {
+            log.error("Could not create the batch details file", e);
+            return null;
+        }
         try (
-                FileWriter writer = new FileWriter(tempFile.getName());
+                // FileWriter without a charset uses the platform default, which decides how
+                // party names are written into a CSV an operator downloads.
+                Writer writer = new OutputStreamWriter(new FileOutputStream(tempFile), StandardCharsets.UTF_8);
                 BufferedWriter bw = new BufferedWriter(writer)) {
             for (Transfer transfer : transfers) {
                 StringBuffer oneLine = new StringBuffer();
@@ -485,7 +498,11 @@ public class BatchApi {
             bw.flush();
             return fileTransferService.uploadFile(tempFile, applicationProperties.bucketName());
         } catch (Exception e) {
-            System.err.format("Exception: %s%n", e);
+            log.error("Could not write the batch details file", e);
+        } finally {
+            if (!tempFile.delete()) {
+                log.warn("Could not delete the temporary batch details file {}", tempFile.getAbsolutePath());
+            }
         }
         return null;
     }

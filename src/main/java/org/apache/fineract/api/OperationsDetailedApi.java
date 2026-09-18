@@ -20,9 +20,9 @@ import org.springframework.web.bind.annotation.*;
 
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.math.BigDecimal;
 import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -74,23 +74,13 @@ public class OperationsDetailedApi {
 
         if (payerPartyId != null) {
             if (payerPartyId.contains("%2B")) {
-                try {
-                    payerPartyId = URLDecoder.decode(payerPartyId, "UTF-8");
-                    logger.info("Decoded payerPartyId: " + payerPartyId);
-                } catch (UnsupportedEncodingException e) {
-                    e.printStackTrace();
-                }
+                payerPartyId = URLDecoder.decode(payerPartyId, StandardCharsets.UTF_8);
             }
             specs.add(TransferSpecs.match(Transfer_.payerPartyId, payerPartyId));
         }
         if (payeePartyId != null) {
             if (payeePartyId.contains("%2B")) {
-                try {
-                    payeePartyId = URLDecoder.decode(payeePartyId, "UTF-8");
-                    logger.info("Decoded payeePartyId: " + payeePartyId);
-                } catch (UnsupportedEncodingException e) {
-                    e.printStackTrace();
-                }
+                payeePartyId = URLDecoder.decode(payeePartyId, StandardCharsets.UTF_8);
             }
             specs.add(TransferSpecs.match(Transfer_.payeePartyId, payeePartyId));
         }
@@ -123,12 +113,7 @@ public class OperationsDetailedApi {
         }
         if (partyId != null) {
             if (partyId.contains("%2B")) {
-                try {
-                    partyId = URLDecoder.decode(partyId, "UTF-8");
-                    logger.info("Decoded PartyId: " + partyId);
-                } catch (UnsupportedEncodingException e) {
-                    e.printStackTrace();
-                }
+                partyId = URLDecoder.decode(partyId, StandardCharsets.UTF_8);
             }
             specs.add(TransferSpecs.multiMatch(Transfer_.payerPartyId, Transfer_.payeePartyId, partyId));
         }
@@ -180,8 +165,7 @@ public class OperationsDetailedApi {
                 transferResponse.parseErrorInformation(json, objectMapper);
                 transferResponseList.add(transferResponse);
             } catch (Exception e) {
-                logger.error("Error parsing errorInformation into DTO: {}", e.getMessage());
-                e.printStackTrace();
+                logger.error("Error parsing errorInformation into DTO", e);
                 if (transferResponse != null) {
                     transferResponseList.add(transferResponse);
                 }

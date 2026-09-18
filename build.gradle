@@ -68,11 +68,11 @@ dependencies {
     implementation 'org.eclipse.persistence:org.eclipse.persistence.jpa'
     annotationProcessor 'org.hibernate.orm:hibernate-jpamodelgen'
     implementation 'jakarta.persistence:jakarta.persistence-api'
-    // TODO move these six to the BOM. They are carried over from the pre-migration
+    // TODO move these five to the BOM. They are carried over from the pre-migration
     // build.gradle and are the only versions still written by hand here, so the "do
     // not hardcode managed versions" rule above does not hold for them yet. Two are
     // worth attention when it happens: commons-io 2.4 is from 2013 and carries
-    // CVE-2021-29425, and junit 4.11 predates the JUnit 4 security fix.
+    // CVE-2021-29425.
     implementation 'joda-time:joda-time:2.10.6'
     implementation 'org.apache.commons:commons-lang3'
     implementation 'com.zaxxer:HikariCP'
@@ -82,7 +82,6 @@ dependencies {
     // Ehcache 2 (net.sf.ehcache) removed: Spring 6 dropped EhCacheCacheManager.
     // Caffeine provides the same TTL/max-size semantics (see CacheConfig).
     implementation 'com.github.ben-manes.caffeine:caffeine'
-    testImplementation 'junit:junit:4.11'
     // JUnit 5 for the tests added with this migration. Versions from the BOM, and
     // only the engine: spring-boot-starter-test would pull mockito, assertj, hamcrest
     // and jsonpath for two tests over pure functions.
