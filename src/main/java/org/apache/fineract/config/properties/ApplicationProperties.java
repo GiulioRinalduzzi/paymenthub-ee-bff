@@ -6,7 +6,7 @@ import org.springframework.validation.annotation.Validated;
 
 /**
  * The bucket batch result files are written to. The deployment sets it as APPLICATION_BUCKET-NAME,
- * an environment variable with a dash in the middle, which is why ApplicationPropertiesTest binds it
+ * an environment variable with a dash in the middle, which is why DeploymentEnvironmentBindingTest binds it
  * from that exact name rather than from a dotted property.
  */
 @Validated
