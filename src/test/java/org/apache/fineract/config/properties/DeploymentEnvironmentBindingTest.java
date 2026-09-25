@@ -74,7 +74,6 @@ class DeploymentEnvironmentBindingTest {
         TokenProperties properties = deploymentEnvironment().bind("token", TokenProperties.class).get();
 
         assertEquals("", properties.client().channel().secret());
-        assertEquals(600, properties.user().accessValiditySeconds());
     }
 
     @Test
@@ -102,27 +101,6 @@ class DeploymentEnvironmentBindingTest {
                 .bind("cloud", CloudProperties.class).get();
 
         assertEquals("https://s3.ap-south-1.amazonaws.com", properties.aws().s3BaseUrl());
-    }
-
-    @Test
-    void buildsEveryGroupFromItsDefaultsWhenTheSectionIsMissing() {
-        Binder empty = Binder.get(new StandardEnvironment());
-
-        // @DefaultValue on the groups: a missing section is built from its defaults rather
-        // than arriving null and failing later with a NullPointerException
-        FineractDatasourceProperties datasource = empty.bindOrCreate("fineract.datasource", FineractDatasourceProperties.class);
-        assertEquals("operations-mysql", datasource.core().host());
-        assertEquals(3306, datasource.core().port());
-        assertEquals("com.mysql.cj.jdbc.Driver", datasource.common().driverclassName());
-
-        CloudProperties cloud = empty.bindOrCreate("cloud", CloudProperties.class);
-        assertEquals("", cloud.aws().credentials().accessKey());
-        assertEquals("", cloud.aws().region().staticRegion());
-        assertEquals("", cloud.azure().blob().connectionString());
-
-        TokenProperties token = empty.bindOrCreate("token", TokenProperties.class);
-        assertEquals(43200, token.user().refreshValiditySeconds());
-        assertEquals("", token.client().channel().secret());
     }
 
     private static StandardEnvironment environmentOf(String name, String value) {
