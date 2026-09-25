@@ -19,7 +19,7 @@ public record FineractDatasourceProperties(@NotNull @Valid Core core, @NotNull @
 
     /**
      * driverclass_name keeps its underscore: it is the name in application.yml and relaxed binding
-     * matches it to driverclassName. FineractDatasourcePropertiesTest pins that down.
+     * matches it to driverclassName. DeploymentEnvironmentBindingTest pins that down.
      */
     public record Common(@NotNull String protocol, @NotNull String subprotocol, @NotNull String driverclassName) {}
 }

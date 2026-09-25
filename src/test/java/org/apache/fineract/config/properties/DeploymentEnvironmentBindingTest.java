@@ -16,14 +16,15 @@ import org.springframework.core.env.SystemEnvironmentPropertySource;
  * and the deployment sets two of them as environment variables with a dash in the name.
  *
  * <p>
- * These tests bind from the environment of the running gazelle deployment, written exactly as the CR
- * writes it, including the values it deliberately leaves empty. If a rename ever creeps in, the build
- * says so instead of a deployment going quiet.
+ * These tests bind from the environment of the running gazelle deployment, with the variable names
+ * written exactly as the CR writes them. The CR sends TOKEN_CLIENT_CHANNEL_SECRET empty; the AWS
+ * values come from a secret there, and are set empty here to show that an empty string still binds.
+ * If a rename ever creeps in, the build says so instead of a deployment going quiet.
  * </p>
  */
 class DeploymentEnvironmentBindingTest {
 
-    /** The environment the ph-ee-operations-app deployment gives the pod, verbatim. */
+    /** The variables the ph-ee-operations-app deployment gives the pod; secret values are stand-ins. */
     private static Binder deploymentEnvironment() {
         Map<String, Object> variables = new LinkedHashMap<>();
         variables.put("FINERACT_DATASOURCE_CORE_USERNAME", "mifos");
